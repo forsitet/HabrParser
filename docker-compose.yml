@@ -5,7 +5,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
+      - sqlite:/app/data
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
@@ -32,4 +32,5 @@ services:
     restart: "no"
 
 volumes:
+  sqlite:
   ollama:
