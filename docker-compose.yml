@@ -1,0 +1,35 @@
+services:
+  habr-tg-bot:
+    build: .
+    container_name: habr-tg-bot
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.5.7
+    container_name: habr-tg-bot-ollama
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  ollama-pull:
+    image: ollama/ollama:0.5.7
+    container_name: habr-tg-bot-ollama-pull
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b-instruct}
+    volumes:
+      - ollama:/root/.ollama
+    depends_on:
+      - ollama
+    entrypoint: ["/bin/sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull \"$${LLM_MODEL}\""]
+    restart: "no"
+
+volumes:
+  ollama:
