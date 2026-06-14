@@ -5,7 +5,10 @@ WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+COPY migrations ./migrations
+RUN test -f ./cmd/habr-tg-bot/main.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/habr-tg-bot ./cmd/habr-tg-bot
 
 FROM alpine:3.20
