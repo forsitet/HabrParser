@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"time"
 
 	"habr-tg-bot/internal/domain"
@@ -16,6 +18,7 @@ type Store interface {
 	EnsureUser(ctx context.Context, telegramUserID int64) error
 	GetUserSettings(ctx context.Context, telegramUserID int64) (domain.UserSettings, error)
 	GetUserCategories(ctx context.Context, telegramUserID int64) ([]string, error)
+	SetUserCategories(ctx context.Context, telegramUserID int64, categories []string) error
 	ToggleUserCategory(ctx context.Context, telegramUserID int64, category string) (bool, error)
 	SetAutoSend(ctx context.Context, telegramUserID int64, enabled bool) error
 }
@@ -33,8 +36,8 @@ type Bot struct {
 	updatesLimit int
 }
 
-func New(token string, store Store, categories CategorySource, articles *service.ArticleService, logger *slog.Logger) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(token)
+func New(token string, proxyURL string, store Store, categories CategorySource, articles *service.ArticleService, logger *slog.Logger) (*Bot, error) {
+	api, err := newTelegramAPI(token, proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("create Telegram bot: %w", err)
 	}
@@ -47,6 +50,21 @@ func New(token string, store Store, categories CategorySource, articles *service
 		updatesLimit: 60,
 	}
 	return b, nil
+}
+
+func newTelegramAPI(token string, proxyURL string) (*tgbotapi.BotAPI, error) {
+	if proxyURL == "" {
+		return tgbotapi.NewBotAPI(token)
+	}
+	parsedProxyURL, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse TELEGRAM_PROXY_URL: %w", err)
+	}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(parsedProxyURL)},
+		Timeout:   30 * time.Second,
+	}
+	return tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, client)
 }
 
 func (b *Bot) Run(ctx context.Context) error {
@@ -101,6 +119,7 @@ func (b *Bot) setCommands() error {
 	commands := tgbotapi.NewSetMyCommands(
 		tgbotapi.BotCommand{Command: "start", Description: "приветствие и настройка"},
 		tgbotapi.BotCommand{Command: "categories", Description: "выбрать категории Хабра"},
+		tgbotapi.BotCommand{Command: "set_categories", Description: "быстро выбрать категории списком"},
 		tgbotapi.BotCommand{Command: "my_categories", Description: "мои категории"},
 		tgbotapi.BotCommand{Command: "latest", Description: "лучшие статьи за день 7 дней назад"},
 		tgbotapi.BotCommand{Command: "today", Description: "интересные статьи за сегодня"},

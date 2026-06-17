@@ -160,6 +160,45 @@ ORDER BY category;
 	return categories, nil
 }
 
+func (s *SQLite) SetUserCategories(ctx context.Context, telegramUserID int64, categories []string) error {
+	if err := s.EnsureUser(ctx, telegramUserID); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin set categories tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM user_categories WHERE telegram_user_id = ?;
+`, telegramUserID); err != nil {
+		return fmt.Errorf("delete user categories: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	seen := make(map[string]struct{}, len(categories))
+	for _, category := range categories {
+		if _, ok := seen[category]; ok {
+			continue
+		}
+		seen[category] = struct{}{}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO user_categories (telegram_user_id, category, created_at)
+VALUES (?, ?, ?);
+`, telegramUserID, category, now); err != nil {
+			return fmt.Errorf("insert user category: %w", err)
+		}
+	}
+	if err := touchUser(ctx, tx, telegramUserID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit set categories: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLite) ToggleUserCategory(ctx context.Context, telegramUserID int64, category string) (bool, error) {
 	if err := s.EnsureUser(ctx, telegramUserID); err != nil {
 		return false, err

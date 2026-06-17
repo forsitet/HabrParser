@@ -41,6 +41,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 		b.handleHelp(chatID)
 	case "categories":
 		b.handleCategories(ctx, chatID, userID, 0)
+	case "set_categories":
+		b.handleSetCategories(ctx, chatID, userID, update.Message.CommandArguments())
 	case "my_categories":
 		b.handleMyCategories(ctx, chatID, userID)
 	case "latest":
@@ -57,11 +59,11 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 }
 
 func (b *Bot) handleStart(chatID int64) {
-	b.sendText(chatID, "Привет. Я каждый день нахожу интересные статьи Хабра по выбранным хабам.\n\n/latest покажет статьи за один календарный день, который был 7 дней назад. Это не скользящее окно: если сегодня 13 июня, я беру 6 июня с 00:00:00 до 23:59:59.\n\nНачните с /categories, затем используйте /latest или включите /auto_on.")
+	b.sendText(chatID, "Привет. Я каждый день нахожу интересные статьи Хабра по выбранным хабам.\n\n/latest покажет статьи за один календарный день, который был 7 дней назад. Это не скользящее окно: если сегодня 13 июня, я беру 6 июня с 00:00:00 до 23:59:59.\n\nНачните с /categories или быстро задайте список через /set_categories go, python, devops. Затем используйте /latest или включите /auto_on.")
 }
 
 func (b *Bot) handleHelp(chatID int64) {
-	b.sendText(chatID, "/start — приветствие\n/categories — выбрать категории Хабра\n/my_categories — показать выбранные категории\n/latest — лучшие статьи за календарный день 7 дней назад\n/today — интересные статьи за текущий день\n/auto_on — включить ежедневную рассылку\n/auto_off — выключить ежедневную рассылку\n/help — помощь")
+	b.sendText(chatID, "/start — приветствие\n/categories — выбрать категории Хабра кнопками\n/set_categories go, python, devops — быстро заменить выбранные категории списком\n/my_categories — показать выбранные категории\n/latest — лучшие статьи за календарный день 7 дней назад\n/today — интересные статьи за текущий день\n/auto_on — включить ежедневную рассылку\n/auto_off — выключить ежедневную рассылку\n/help — помощь")
 }
 
 func (b *Bot) handleCategories(ctx context.Context, chatID int64, userID int64, page int) {
@@ -76,6 +78,38 @@ func (b *Bot) handleCategories(ctx context.Context, chatID int64, userID int64, 
 	if _, err := b.api.Send(msg); err != nil {
 		b.logger.Warn("failed to send categories", "telegram_user_id", userID, "error", err)
 	}
+}
+
+func (b *Bot) handleSetCategories(ctx context.Context, chatID int64, userID int64, args string) {
+	inputs := parseCategoryInputs(args)
+	if len(inputs) == 0 {
+		b.sendText(chatID, "Укажите категории через запятую или пробел. Например:\n/set_categories go, python, devops")
+		return
+	}
+
+	categories, err := b.categories.FetchCategories(ctx)
+	if err != nil {
+		b.logger.Warn("failed to fetch categories for quick selection", "telegram_user_id", userID, "error", err)
+		b.sendText(chatID, "Не удалось получить список категорий Хабра. Попробуйте позже.")
+		return
+	}
+
+	selected, problems := resolveCategoryInputs(categories, inputs)
+	if len(problems) > 0 {
+		b.sendText(chatID, "Не удалось распознать категории:\n"+strings.Join(problems, "\n")+"\n\nПопробуйте alias или точное название. Например:\n/set_categories go, python, devops")
+		return
+	}
+	if len(selected) == 0 {
+		b.sendText(chatID, "Не удалось выбрать ни одной категории.")
+		return
+	}
+	if err := b.store.SetUserCategories(ctx, userID, selected); err != nil {
+		b.logger.Warn("failed to set categories", "telegram_user_id", userID, "error", err)
+		b.sendText(chatID, "Не удалось сохранить категории. Попробуйте позже.")
+		return
+	}
+
+	b.sendText(chatID, "Категории обновлены:\n"+strings.Join(b.categoryTitlesFromList(categories, selected), "\n"))
 }
 
 func (b *Bot) handleMyCategories(ctx context.Context, chatID int64, userID int64) {
@@ -294,4 +328,87 @@ func (b *Bot) categoryTitlesFromList(categories []domain.Category, aliases []str
 	}
 	sort.Strings(result)
 	return result
+}
+
+func parseCategoryInputs(args string) []string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return nil
+	}
+
+	args = strings.NewReplacer("\n", ",", ";", ",").Replace(args)
+	var parts []string
+	if strings.Contains(args, ",") {
+		parts = strings.Split(args, ",")
+	} else {
+		parts = strings.Fields(args)
+	}
+
+	inputs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			inputs = append(inputs, part)
+		}
+	}
+	return inputs
+}
+
+func resolveCategoryInputs(categories []domain.Category, inputs []string) ([]string, []string) {
+	selected := make([]string, 0, len(inputs))
+	selectedSet := make(map[string]struct{}, len(inputs))
+	problems := make([]string, 0)
+
+	for _, input := range inputs {
+		category, err := resolveCategoryInput(categories, input)
+		if err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		if _, ok := selectedSet[category.Alias]; ok {
+			continue
+		}
+		selectedSet[category.Alias] = struct{}{}
+		selected = append(selected, category.Alias)
+	}
+	return selected, problems
+}
+
+func resolveCategoryInput(categories []domain.Category, input string) (domain.Category, error) {
+	needle := normalizeCategoryName(input)
+	for _, category := range categories {
+		if normalizeCategoryName(category.Alias) == needle || normalizeCategoryName(category.Title) == needle {
+			return category, nil
+		}
+	}
+
+	matches := make([]domain.Category, 0)
+	for _, category := range categories {
+		if strings.Contains(normalizeCategoryName(category.Alias), needle) || strings.Contains(normalizeCategoryName(category.Title), needle) {
+			matches = append(matches, category)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) == 0 {
+		return domain.Category{}, fmt.Errorf("%q: не найдена", input)
+	}
+
+	labels := make([]string, 0, len(matches))
+	for _, match := range matches {
+		labels = append(labels, fmt.Sprintf("%s (%s)", match.Title, match.Alias))
+		if len(labels) == 5 {
+			break
+		}
+	}
+	return domain.Category{}, fmt.Errorf("%q: неоднозначно, подходит: %s", input, strings.Join(labels, ", "))
+}
+
+func normalizeCategoryName(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.ReplaceAll(value, "ё", "е")
+	value = strings.ReplaceAll(value, "_", " ")
+	value = strings.ReplaceAll(value, "-", " ")
+	return strings.Join(strings.Fields(value), " ")
 }

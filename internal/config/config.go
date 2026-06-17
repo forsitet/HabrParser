@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	TelegramBotToken     string
+	TelegramProxyURL     string
 	SQLitePath           string
 	HabrBaseURL          string
 	HTTPTimeout          time.Duration
@@ -50,6 +51,7 @@ type ScoreConfig struct {
 func Load() (Config, error) {
 	cfg := Config{
 		TelegramBotToken:     strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		TelegramProxyURL:     strings.TrimSpace(os.Getenv("TELEGRAM_PROXY_URL")),
 		SQLitePath:           getEnv("SQLITE_PATH", "data/habr_tg_bot.sqlite"),
 		HabrBaseURL:          strings.TrimRight(getEnv("HABR_BASE_URL", "https://habr.com"), "/"),
 		HTTPTimeout:          getDurationEnv("HTTP_TIMEOUT", 20*time.Second),

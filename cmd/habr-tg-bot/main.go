@@ -56,7 +56,7 @@ func main() {
 	hashtagGenerator := hashtags.New(7)
 	articleService := service.NewArticleService(store, habrClient, scorer, summarizer, hashtagGenerator, cfg.MinArticleScore, cfg.MaxArticlesPerDigest, loc, logger)
 
-	telegramBot, err := bot.New(cfg.TelegramBotToken, store, habrClient, articleService, logger)
+	telegramBot, err := bot.New(cfg.TelegramBotToken, cfg.TelegramProxyURL, store, habrClient, articleService, logger)
 	if err != nil {
 		logger.Error("failed to initialize Telegram bot", "error", err)
 		os.Exit(1)

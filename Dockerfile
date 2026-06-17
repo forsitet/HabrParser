@@ -1,15 +1,24 @@
+# syntax=docker/dockerfile:1
+
 FROM golang:1.23-alpine AS builder
 
 WORKDIR /src
 
 COPY go.mod go.sum* ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    for i in 1 2 3; do \
+        go mod download && exit 0; \
+        sleep 5; \
+    done; \
+    go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
 COPY migrations ./migrations
 RUN test -f ./cmd/habr-tg-bot/main.go
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/habr-tg-bot ./cmd/habr-tg-bot
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/habr-tg-bot ./cmd/habr-tg-bot
 
 FROM alpine:3.20
 
